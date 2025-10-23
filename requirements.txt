@@ -7,3 +7,4 @@ passlib[bcrypt]
 reportlab
 pillow
 pydantic
+psycopg2-binary
