@@ -242,10 +242,10 @@ def startup():
     try:
         admin = db.query(User).filter(User.role == "admin").first()
         if not admin:
-            default_admin = User(username="BimtechAdmin", hashed_password=get_password_hash("Simon@Bimtech"), role="admin")
+            default_admin = User(username="BimtechAdmin", hashed_password=get_password_hash("Simo2025"), role="admin")
             db.add(default_admin)
             db.commit()
-            print("Created default admin: username=Bimtechadmin password=Bimtech@2025 (change it!)")
+            print("Created default admin: username=Bimtechadmin password=Simo2025 (change it!)")
     finally:
         db.close()
 
