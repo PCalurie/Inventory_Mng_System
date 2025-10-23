@@ -7,7 +7,7 @@ from PIL import Image as PILImage
 from datetime import datetime
 import os
 
-API_BASE_URL = "http://127.0.0.1:8000"
+API_BASE_URL = "https://inventory-backend-knf8.onrender.com"
 
 # 1. API Helper with Token and Error Handling
 def api_call(endpoint, method='GET', data=None, files=None):
