@@ -22,16 +22,20 @@ from reportlab.platypus import Image as ReportLabImage
 from PIL import Image as PILImage
 
 # ---- Config ----
-DATABASE_URL = "sqlite:///./inventory.db"
-SECRET_KEY = "change_this_secret_to_a_strong_random_value"  # change in production
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24  # 1 day
+DATABASE_URL = os.getenv('DATABASE_URL', 'sqlite:///./inventory.db')
+
+if DATABASE_URL and DATABASE_URL.startswitch('postgres://'):
+    DATABASE_URL = DATABASE_URL.replace('postgres://', 'postgresql://', 1)
+
+SECRET_KEY = os.getenv("SECRET_KEY", "change_this_secret_to_a_strong_random_value")  # change in production
+ALGORITHM = os.getenv("ALGORITHM", "HS256")
+ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "1440"))  # 1 day
 
 REPORTS_DIR = "reports"
 os.makedirs(REPORTS_DIR, exist_ok=True)
 
 # ---- SQLAlchemy setup ----
-engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 Base = declarative_base()
 
