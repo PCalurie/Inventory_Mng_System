@@ -221,6 +221,13 @@ def add_logo_to_pdf(elements):
         print(f"Logo not found or invalid: {e}")
     return False
 
+def safe_password_hash(password: str) -> str:
+    """Safely hash password handling bcrypt's 72-byte limit"""
+    password_bytes = password.encode('utf-8')
+    if len(password_bytes) > 72:
+        password_bytes = password_bytes[:72]
+    safe_password = password_bytes.decode('utf-8', errors='ignore')
+    return pwd_context.hash(safe_password)
 # ---- App ----
 app = FastAPI(title="Inventory API")
 
@@ -242,7 +249,7 @@ def startup():
     try:
         admin = db.query(User).filter(User.role == "admin").first()
         if not admin:
-            default_admin = User(username="BimtechAdmin", hashed_password=get_password_hash("Simo2025"), role="admin")
+            default_admin = User(username="BimtechAdmin", hashed_password=safe_password_hash("Simo2025"), role="admin")
             db.add(default_admin)
             db.commit()
             print("Created default admin: username=Bimtechadmin password=Simo2025 (change it!)")
