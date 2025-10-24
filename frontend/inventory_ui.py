@@ -64,7 +64,7 @@ if 'user_role' not in st.session_state:
 # 2. Authentication UI
 def login_screen():
     st.title("BIMTECH Inventory Management System Login")
-    
+
     with st.form("login_form"):
         username = st.text_input("Username", value="username")
         password = st.text_input("Password", type="password", value="password")
@@ -98,6 +98,9 @@ def login_screen():
                         user_data = user_response.json()
                         st.session_state['user_role'] = user_data['role']
                         st.success("Login successful!")
+                        user_data = api_call("/me")
+                        st.session_state['user_role'] = user_data['role']
+                        st.session_state['username'] = user_data['username']  # Add this line
                         st.rerun()
                     else:
                         st.error("Failed to fetch user details")
@@ -431,11 +434,244 @@ def download_pdf_report(item_id=None, low_stock_only=False, include_transactions
         st.error(f"❌ Unexpected error: {e}")
 
 def admin_tools():
-    st.header("Admin Tools")
-    st.info("Administrator functions")
+    st.header("🔧 Admin Tools")
     
-    # Add user management, bulk operations, etc.
-    st.write("Admin features coming soon...")
+    tab1, tab2, tab3 = st.tabs(["👥 User Management", "🗑️ Delete Items", "📊 System Info"])
+    
+    with tab1:
+        user_management()
+    
+    with tab2:
+        delete_items()
+    
+    with tab3:
+        system_info()
+
+def user_management():
+    st.subheader("User Management")
+    
+    # Add new user
+    st.write("### Add New User")
+    with st.form("add_user_form"):
+        col1, col2, col3 = st.columns([2, 1, 1])
+        with col1:
+            new_username = st.text_input("Username")
+        with col2:
+            new_password = st.text_input("Password", type="password")
+        with col3:
+            new_role = st.selectbox("Role", ["user", "admin"])
+        
+        if st.form_submit_button("Add User"):
+            if new_username and new_password:
+                payload = {
+                    "username": new_username,
+                    "password": new_password,
+                    "role": new_role
+                }
+                result = api_call("/users", method="POST", data=payload)
+                if result:
+                    st.success(f"User {new_username} created successfully!")
+                    st.rerun()
+            else:
+                st.error("Username and password are required")
+    
+    st.markdown("---")
+    
+    # List and manage existing users
+    st.write("### Existing Users")
+    users = api_call("/users")
+    
+    if users:
+        for user in users:
+            col1, col2, col3, col4 = st.columns([2, 1, 1, 1])
+            with col1:
+                st.write(f"**{user['username']}**")
+            with col2:
+                st.write(f"`{user['role']}`")
+            with col3:
+                if user['username'] != st.session_state.get('username'):
+                    # Role update
+                    if user['role'] == 'admin':
+                        if st.button("Make User", key=f"demote_{user['username']}"):
+                            result = api_call(f"/users/{user['username']}/role", method="PUT", data={"role": "user"})
+                            if result:
+                                st.success(result.get("detail", "Role updated"))
+                                st.rerun()
+                    else:
+                        if st.button("Make Admin", key=f"promote_{user['username']}"):
+                            result = api_call(f"/users/{user['username']}/role", method="PUT", data={"role": "admin"})
+                            if result:
+                                st.success(result.get("detail", "Role updated"))
+                                st.rerun()
+            with col4:
+                if user['username'] != st.session_state.get('username'):
+                    if st.button("🗑️ Delete", key=f"delete_{user['username']}"):
+                        result = api_call(f"/users/{user['username']}", method="DELETE")
+                        if result:
+                            st.success(result.get("detail", "User deleted"))
+                            st.rerun()
+    else:
+        st.info("No users found")
+
+def delete_items():
+    st.subheader("Delete Items")
+    st.warning("⚠️ Items can only be deleted if they have no transactions.")
+    
+    # Fetch all items
+    items = api_call("/items")
+    
+    if items:
+        st.write("### Current Inventory Items")
+        
+        for item in items:
+            col1, col2, col3, col4, col5 = st.columns([3, 2, 2, 1, 1])
+            with col1:
+                st.write(f"**{item['item_name']}**")
+                st.write(f"ID: `{item['item_id']}`")
+            with col2:
+                st.write(f"Stock: **{item['quantity_in_stock']}**")
+            with col3:
+                st.write(f"Min: {item['min_stock']}")
+            with col4:
+                # Check if item has transactions
+                transactions = api_call(f"/transactions/{item['item_id']}")
+                has_transactions = transactions and len(transactions) > 0
+                
+                if has_transactions:
+                    st.error(f"Has {len(transactions)} transactions")
+                else:
+                    st.success("No transactions")
+            with col5:
+                if not has_transactions:
+                    if st.button("Delete", key=f"del_{item['item_id']}", type="secondary"):
+                        result = api_call(f"/items/{item['item_id']}", method="DELETE")
+                        if result:
+                            st.success(f"Item {item['item_id']} deleted successfully!")
+                            st.rerun()
+                else:
+                    if st.button("View Transactions", key=f"view_{item['item_id']}"):
+                        st.session_state[f"show_txns_{item['item_id']}"] = True
+            
+            # Show transactions for this item if requested
+            if st.session_state.get(f"show_txns_{item['item_id']}"):
+                show_item_transactions(item['item_id'])
+        
+        st.markdown("---")
+        
+        # Transaction Management Section
+        st.write("### Transaction Management")
+        manage_transactions()
+
+def show_item_transactions(item_id):
+    """Show transactions for a specific item with delete options"""
+    st.write(f"#### Transactions for {item_id}")
+    
+    transactions = api_call(f"/transactions/{item_id}")
+    if transactions:
+        df = pd.DataFrame(transactions)
+        for _, txn in df.iterrows():
+            col1, col2, col3, col4, col5 = st.columns([2, 1, 2, 2, 1])
+            with col1:
+                st.write(f"**{txn['date']}**")
+            with col2:
+                st.write(f"**{txn['action_type']}**")
+            with col3:
+                st.write(f"Qty: {txn['quantity']}")
+            with col4:
+                st.write(f"By: {txn.get('created_by', 'Unknown')}")
+            with col5:
+                if st.button("🗑️", key=f"del_txn_{txn['id']}"):
+                    result = api_call(f"/transactions/{txn['id']}", method="DELETE")
+                    if result:
+                        st.success("Transaction deleted!")
+                        st.rerun()
+    else:
+        st.info("No transactions found for this item")
+
+def manage_transactions():
+    """Manage all transactions with filtering and bulk operations"""
+    st.write("#### All Transactions")
+    
+    # Filter options
+    col1, col2 = st.columns(2)
+    with col1:
+        filter_type = st.selectbox("Filter by type", ["All", "Receive", "Issue"])
+    with col2:
+        limit = st.number_input("Show last N transactions", min_value=10, max_value=500, value=100)
+    
+    # Fetch transactions
+    transactions = api_call(f"/transactions?limit={limit}")
+    
+    if transactions:
+        # Apply filters
+        if filter_type != "All":
+            transactions = [t for t in transactions if t['action_type'] == filter_type]
+        
+        st.write(f"Showing {len(transactions)} transactions")
+        
+        # Display transactions with delete options
+        for txn in transactions:
+            col1, col2, col3, col4, col5, col6 = st.columns([2, 1, 1, 2, 2, 1])
+            with col1:
+                st.write(f"**{txn['date'].split('T')[0] if 'T' in txn['date'] else txn['date']}**")
+            with col2:
+                st.write(f"`{txn['item_id']}`")
+            with col3:
+                st.write(f"**{txn['action_type']}**")
+            with col4:
+                st.write(f"Qty: {txn['quantity']}")
+            with col5:
+                st.write(f"By: {txn.get('created_by', 'Unknown')}")
+            with col6:
+                if st.button("Delete", key=f"del_all_txn_{txn['id']}", type="secondary"):
+                    result = api_call(f"/transactions/{txn['id']}", method="DELETE")
+                    if result:
+                        st.success("Transaction deleted!")
+                        st.rerun()
+    else:
+        st.info("No transactions found")
+
+def system_info():
+    st.subheader("System Information")
+    
+    # Basic system info
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.write("**Backend Status**")
+        try:
+            response = requests.get(f"{API_BASE_URL}/")
+            if response.status_code == 200:
+                st.success("✅ Online")
+            else:
+                st.error("�️ Offline")
+        except:
+            st.error("❌ Unreachable")
+    
+    with col2:
+        st.write("**Database**")
+        items = api_call("/items")
+        users = api_call("/users")
+        
+        if items is not None and users is not None:
+            st.write(f"Items: {len(items)}")
+            st.write(f"Users: {len(users)}")
+        else:
+            st.write("Data unavailable")
+    
+    # Quick stats
+    st.markdown("---")
+    st.write("**Quick Actions**")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        if st.button("🔄 Refresh All Data"):
+            st.rerun()
+    
+    with col2:
+        if st.button("📊 Generate System Report"):
+            download_pdf_report()
 
 def main():
     st.set_page_config(page_title="BIMTECH Inventory Management System", layout="wide")
