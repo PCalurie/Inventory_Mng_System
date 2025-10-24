@@ -1,0 +1,9 @@
+SECRET_KEY=59Cgaww1gtNpn615f0MpYrEukJVw4dd7opP5Gw3-NCI
+ALGORITHM=HS256
+ACCESS_TOKEN_EXPIRE_MINUTES=1440
+
+
+
+
+
+https://inventory-backend-knf8.onrender.com

@@ -269,10 +269,53 @@ def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(), db:
 def create_user(user_in: UserCreate, db: Session = Depends(get_db), admin: User = Depends(get_admin_user)):
     if get_user(db, user_in.username):
         raise HTTPException(status_code=400, detail="User already exists")
-    user = User(username=user_in.username, hashed_password=get_password_hash(user_in.password), role=user_in.role)
+    user = User(username=user_in.username, hashed_password=safe_password_hash(user_in.password), role=user_in.role)
     db.add(user)
     db.commit()
     return {"username": user.username, "role": user.role}
+
+# ---- User Management Endpoints ----
+@app.get("/users", response_model=List[UserOut])
+def list_users(db: Session = Depends(get_db), admin: User = Depends(get_admin_user)):
+    """List all users (admin only)"""
+    users = db.query(User).order_by(User.username).all()
+    return [{"username": user.username, "role": user.role} for user in users]
+
+@app.delete("/users/{username}")
+def delete_user(username: str, db: Session = Depends(get_db), admin: User = Depends(get_admin_user)):
+    """Delete a user (admin only)"""
+    if username == admin.username:
+        raise HTTPException(status_code=400, detail="Cannot delete your own account")
+    
+    user = db.query(User).filter(User.username == username).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    db.delete(user)
+    db.commit()
+    return {"detail": f"User {username} deleted successfully"}
+
+@app.put("/users/{username}/role")
+def update_user_role(
+    username: str, 
+    role_update: dict,  # Expecting {"role": "admin" or "user"}
+    db: Session = Depends(get_db), 
+    admin: User = Depends(get_admin_user)
+):
+    """Update user role (admin only)"""
+    if username == admin.username:
+        raise HTTPException(status_code=400, detail="Cannot change your own role")
+    
+    user = db.query(User).filter(User.username == username).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    if role_update.get("role") not in ["admin", "user"]:
+        raise HTTPException(status_code=400, detail="Role must be 'admin' or 'user'")
+    
+    user.role = role_update["role"]
+    db.commit()
+    return {"detail": f"User {username} role updated to {role_update['role']}"}
 
 @app.get("/me", response_model=UserOut)
 def read_me(current_user: User = Depends(get_current_user)):
@@ -370,16 +413,63 @@ def update_item_endpoint(item_id: str, payload: ItemUpdate, db: Session = Depend
 def delete_item_endpoint(item_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     if current_user.role != "admin":
         raise HTTPException(status_code=403, detail="Only admin can delete items")
+    
     it = db.query(Item).filter(Item.item_id == item_id).first()
     if not it:
         raise HTTPException(status_code=404, detail="Item not found")
-    # check transactions
+    
+    # Check transactions with better error message
     txns = db.query(Transaction).filter(Transaction.item_id == item_id).first()
     if txns:
-        raise HTTPException(status_code=400, detail="Cannot delete item with existing transactions")
+        txn_count = db.query(Transaction).filter(Transaction.item_id == item_id).count()
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Cannot delete item with {txn_count} existing transactions. Delete transactions first."
+        )
+    
     db.delete(it)
     db.commit()
-    return {"detail": "deleted"}
+    return {"detail": f"Item {item_id} deleted successfully"}
+
+# ---- Transaction Management ----
+@app.delete("/transactions/{transaction_id}")
+def delete_transaction(
+    transaction_id: int, 
+    db: Session = Depends(get_db), 
+    current_user: User = Depends(get_current_user)
+):
+    """Delete a transaction (admin only)"""
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Only admin can delete transactions")
+    
+    # Find the transaction
+    txn = db.query(Transaction).filter(Transaction.id == transaction_id).first()
+    if not txn:
+        raise HTTPException(status_code=404, detail="Transaction not found")
+    
+    # Find the related item
+    item = db.query(Item).filter(Item.item_id == txn.item_id).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Related item not found")
+    
+    # Reverse the transaction's effect on stock
+    if txn.action_type == "Receive":
+        # Subtract from stock (since we're removing a receive transaction)
+        item.quantity_in_stock = max(0, item.quantity_in_stock - txn.quantity)
+    elif txn.action_type == "Issue":
+        # Add back to stock (since we're removing an issue transaction)
+        item.quantity_in_stock = item.quantity_in_stock + txn.quantity
+    
+    # Save the item stock update
+    db.add(item)
+    
+    # Delete the transaction
+    db.delete(txn)
+    db.commit()
+    
+    return {
+        "detail": f"Transaction {transaction_id} deleted successfully. Stock for {txn.item_id} updated."
+    }
 
 # ---- Transactions endpoints ----
 @app.post("/transactions", response_model=TransactionOut)
