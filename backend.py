@@ -142,8 +142,11 @@ class TransactionOut(BaseModel):
     created_by: Optional[str]
     date: str
 
-    class Config:
-        orm_mode = True
+class Config:
+    orm_mode = True
+
+class RoleUpdate(BaseModel):
+    role: str
 
 # ---- Utilities ----
 def create_tables():
@@ -298,7 +301,7 @@ def delete_user(username: str, db: Session = Depends(get_db), admin: User = Depe
 @app.put("/users/{username}/role")
 def update_user_role(
     username: str, 
-    role_update: dict,  # Expecting {"role": "admin" or "user"}
+    role_update: RoleUpdate,  # Expecting {"role": "admin" or "user"}
     db: Session = Depends(get_db), 
     admin: User = Depends(get_admin_user)
 ):

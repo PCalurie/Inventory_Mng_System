@@ -21,7 +21,14 @@ def api_call(endpoint, method='GET', data=None, files=None):
 
     try:
         url = f"{API_BASE_URL}{endpoint}"
+        st.write(f"🔧 API Call: {method} {url}")
+        if data:
+            st.write(f"📦 Payload: {data}")
+        
         response = requests.request(method, url, headers=headers, json=data, files=files)
+        
+        # Debug response
+        st.write(f"📡 Response: {response.status_code}")
         
         # Only raise for status if it's a server error, not auth errors
         if response.status_code >= 500:
@@ -37,10 +44,13 @@ def api_call(endpoint, method='GET', data=None, files=None):
         elif response.status_code == 403:
             st.error("You don't have permission for this action.")
             return None
+        elif response.status_code == 405:
+            st.error(f"Method Not Allowed: {method} {endpoint}")
+            return None
         elif response.status_code >= 400:
             # Don't stop the app, just return None
             error_detail = response.json().get("detail", "Unknown error")
-            st.error(f"API Error: {error_detail}")
+            st.error(f"API Error ({response.status_code}): {error_detail}")
             return None
 
         return response.json()
@@ -433,9 +443,31 @@ def download_pdf_report(item_id=None, low_stock_only=False, include_transactions
     except Exception as e:
         st.error(f"❌ Unexpected error: {e}")
 
+def test_admin_endpoints():
+    st.subheader("🔧 Test Admin Endpoints")
+    
+    endpoints_to_test = [
+        ("GET", "/users"),
+        ("GET", "/items"),
+        ("GET", "/transactions?limit=10"),
+    ]
+    
+    for method, endpoint in endpoints_to_test:
+        if st.button(f"Test {method} {endpoint}"):
+            result = api_call(endpoint, method=method)
+            if result:
+                st.success(f"✅ {method} {endpoint} - SUCCESS")
+                st.json(result)
+            else:
+                st.error(f"❌ {method} {endpoint} - FAILED")
+
+# Add this to your admin_tools function temporarily
 def admin_tools():
     st.header("🔧 Admin Tools")
     
+    # Temporary debug
+    test_admin_endpoints()
+
     tab1, tab2, tab3 = st.tabs(["👥 User Management", "🗑️ Delete Items", "📊 System Info"])
     
     with tab1:
@@ -493,7 +525,8 @@ def user_management():
                     # Role update
                     if user['role'] == 'admin':
                         if st.button("Make User", key=f"demote_{user['username']}"):
-                            result = api_call(f"/users/{user['username']}/role", method="PUT", data={"role": "user"})
+                            payload = {"role": "user"}
+                            result = api_call(f"/users/{user['username']}/role", method="PUT", data=payload)
                             if result:
                                 st.success(result.get("detail", "Role updated"))
                                 st.rerun()
