@@ -412,17 +412,16 @@ def update_item_endpoint(item_id: str, payload: ItemUpdate, db: Session = Depend
 def delete_item_endpoint(item_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     if current_user.role != "admin":
         raise HTTPException(status_code=403, detail="Only admin can delete items")
-    
+
     it = db.query(Item).filter(Item.item_id == item_id).first()
     if not it:
         raise HTTPException(status_code=404, detail="Item not found")
-    
-    # Check transactions with better error message
-    txns = db.query(Transaction).filter(Transaction.item_id == item_id).first()
-    if txns:
-        txn_count = db.query(Transaction).filter(Transaction.item_id == item_id).count()
+
+    # Check transactions - FIXED LOGIC
+    txn_count = db.query(Transaction).filter(Transaction.item_id == item_id).count()
+    if txn_count > 0:
         raise HTTPException(
-            status_code=400, 
+            status_code=400,
             detail=f"Cannot delete item with {txn_count} existing transactions. Delete transactions first."
         )
     
@@ -431,44 +430,6 @@ def delete_item_endpoint(item_id: str, db: Session = Depends(get_db), current_us
     return {"detail": f"Item {item_id} deleted successfully"}
 
 # ---- Transaction Management ----
-@app.delete("/transactions/{transaction_id}")
-def delete_transaction(
-    transaction_id: int, 
-    db: Session = Depends(get_db), 
-    current_user: User = Depends(get_current_user)
-):
-    """Delete a transaction (admin only)"""
-    if current_user.role != "admin":
-        raise HTTPException(status_code=403, detail="Only admin can delete transactions")
-    
-    # Find the transaction
-    txn = db.query(Transaction).filter(Transaction.id == transaction_id).first()
-    if not txn:
-        raise HTTPException(status_code=404, detail="Transaction not found")
-    
-    # Find the related item
-    item = db.query(Item).filter(Item.item_id == txn.item_id).first()
-    if not item:
-        raise HTTPException(status_code=404, detail="Related item not found")
-    
-    # Reverse the transaction's effect on stock
-    if txn.action_type == "Receive":
-        # Subtract from stock (since we're removing a receive transaction)
-        item.quantity_in_stock = max(0, item.quantity_in_stock - txn.quantity)
-    elif txn.action_type == "Issue":
-        # Add back to stock (since we're removing an issue transaction)
-        item.quantity_in_stock = item.quantity_in_stock + txn.quantity
-    
-    # Save the item stock update
-    db.add(item)
-    
-    # Delete the transaction
-    db.delete(txn)
-    db.commit()
-    
-    return {
-        "detail": f"Transaction {transaction_id} deleted successfully. Stock for {txn.item_id} updated."
-    }
 
 # ---- Transactions endpoints ----
 @app.post("/transactions", response_model=TransactionOut)
@@ -516,6 +477,54 @@ def transactions_for_item(item_id: str, db: Session = Depends(get_db), current_u
     rows = db.query(Transaction).filter(Transaction.item_id == item_id).order_by(Transaction.date.desc()).all()
     return [TransactionOut(id=r.id, item_id=r.item_id, action_type=r.action_type, quantity=r.quantity,
                            issued_to=r.issued_to, branch=r.branch, from_location=r.from_location, note=r.note, created_by=r.created_by, date=r.date) for r in rows]
+
+@app.get("/transactions/item/{item_id}", response_model=List[TransactionOut])
+def get_transactions_by_item(
+    item_id: str, 
+    db: Session = Depends(get_db), 
+    current_user: User = Depends(get_current_user)
+):
+    """Get all transactions for a specific item"""
+    transactions = db.query(Transaction).filter(Transaction.item_id == item_id).order_by(Transaction.date.desc()).all()
+    return transactions
+
+@app.delete("/transactions/{transaction_id}")
+def delete_transaction(
+    transaction_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Delete a transaction (admin only)"""
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Only admin can delete transactions")
+
+    # Find the transaction
+    txn = db.query(Transaction).filter(Transaction.id == transaction_id).first()
+    if not txn:
+        raise HTTPException(status_code=404, detail="Transaction not found")
+
+    # Find the related item
+    item = db.query(Item).filter(Item.item_id == txn.item_id).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Related item not found")
+
+    # Reverse the transaction's effect on stock
+    if txn.action_type == "Receive":
+        # Subtract from stock (since we're removing a receive transaction)
+        item.quantity_in_stock = max(0, item.quantity_in_stock - txn.quantity)
+    elif txn.action_type == "Issue":
+        # Add back to stock (since we're removing an issue transaction)
+        item.quantity_in_stock = item.quantity_in_stock + txn.quantity
+
+    # Save the item stock update
+    db.add(item)
+    # Delete the transaction
+    db.delete(txn)
+    db.commit()
+
+    return {
+        "detail": f"Transaction {transaction_id} deleted successfully. Stock for {txn.item_id} updated."
+    }
 
 # ---- Search & low stock ----
 @app.get("/search")
