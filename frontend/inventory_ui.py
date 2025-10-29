@@ -8,6 +8,7 @@ from datetime import datetime
 import os
 
 API_BASE_URL = "https://inventory-backend-knf8.onrender.com"
+#API_BASE_URL = "http://127.0.0.1:8000"
 
 # 1. API Helper with Token and Error Handling
 def api_call(endpoint, method='GET', data=None, files=None):
@@ -516,13 +517,13 @@ def user_management():
 def delete_items():
     st.subheader("Delete Items")
     st.warning("⚠️ Items can only be deleted if they have no transactions.")
-
+    
     # Fetch all items
     items = api_call("/items")
-
+    
     if items:
         st.write("### Current Inventory Items")
-
+        
         for item in items:
             col1, col2, col3, col4, col5 = st.columns([3, 2, 2, 1, 1])
             with col1:
@@ -533,33 +534,34 @@ def delete_items():
             with col3:
                 st.write(f"Min: {item['min_stock']}")
             with col4:
-                # Check if item has transactions - FIXED ENDPOINT
-                transactions = api_call(f"/transactions/item/{item['item_id']}")
+                # Check if item has transactions
+                transactions = api_call(f"/transactions/{item['item_id']}")
                 has_transactions = transactions and len(transactions) > 0
-
+                
                 if has_transactions:
                     st.error(f"Has {len(transactions)} transactions")
-                    # Show transactions in an expander
-                    with st.expander("View Transactions"):
-                        for txn in transactions:
-                            st.write(f"- {txn['date']}: {txn['action_type']} {txn['quantity']} units")
-                            if txn['id']:
-                                if st.button(f"Delete Transaction", key=f"del_txn_{txn['id']}"):
-                                    result = api_call(f"/transactions/{txn['id']}", method="DELETE")
-                                    if result:
-                                        st.success("Transaction deleted!")
-                                        st.rerun()
                 else:
                     st.success("No transactions")
             with col5:
                 if not has_transactions:
-                    if st.button("Delete Item", key=f"delete_{item['item_id']}"):
+                    if st.button("Delete", key=f"del_{item['item_id']}", type="secondary"):
                         result = api_call(f"/items/{item['item_id']}", method="DELETE")
                         if result:
-                            st.success(result.get("detail", "Item deleted"))
+                            st.success(f"Item {item['item_id']} deleted successfully!")
                             st.rerun()
                 else:
-                    st.button("Delete Item", disabled=True, key=f"disabled_{item['item_id']}")
+                    if st.button("View Transactions", key=f"view_{item['item_id']}"):
+                        st.session_state[f"show_txns_{item['item_id']}"] = True
+            
+            # Show transactions for this item if requested
+            if st.session_state.get(f"show_txns_{item['item_id']}"):
+                show_item_transactions(item['item_id'])
+        
+        st.markdown("---")
+        
+        # Transaction Management Section
+        st.write("### Transaction Management")
+        manage_transactions()
 
 def show_item_transactions(item_id):
     """Show transactions for a specific item with delete options"""
