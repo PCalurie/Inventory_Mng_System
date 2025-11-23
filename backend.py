@@ -19,6 +19,10 @@ from passlib.context import CryptContext
 from jose import JWTError, jwt
 from reportlab.platypus import Image as ReportLabImage
 from PIL import Image as PILImage
+from reportlab.lib.units import inch
+from sqlalchemy import func
+from datetime import datetime, time
+import re
 
 # ---- Config ----
 
@@ -120,6 +124,14 @@ class TransactionCreate(BaseModel):
     from_location: Optional[str] = None
     note: Optional[str] = None
     date: Optional[str] = None  # if omitted, filled by server
+
+class DeliveryNoteFilter(BaseModel):
+    branch: Optional[str] = None
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
+
+class SignatureData(BaseModel):
+    receiver_name: str
 
 class ItemOut(BaseModel):
     item_id: str
@@ -430,6 +442,173 @@ def delete_item_endpoint(item_id: str, db: Session = Depends(get_db), current_us
     db.commit()
     return {"detail": f"Item {item_id} deleted successfully"}
 
+@app.post("/report/delivery-note")
+def generate_delivery_note(
+    filter_data: DeliveryNoteFilter,
+    signature_data: SignatureData,
+    db: Session = Depends(get_db), 
+    current_user: User = Depends(get_current_user)
+):
+    """Generate a delivery note PDF with signature lines for physical signing"""
+    try:
+        # Query transactions with filters
+        query = db.query(Transaction).filter(Transaction.action_type == "Issue")
+        
+        # Filter by branch (location) - FIXED: use branch field
+        if filter_data.branch:
+            query = query.filter(Transaction.branch == filter_data.branch)
+        
+        # Apply date filters
+        if filter_data.start_date:
+            query = query.filter(Transaction.date >= filter_data.start_date)
+        if filter_data.end_date:
+            query = query.filter(Transaction.date <= filter_data.end_date)
+        
+        transactions = query.order_by(Transaction.date.desc()).all()
+        
+        if not transactions:
+            raise HTTPException(status_code=404, detail="No issued items found for the selected criteria")
+
+        # Create temporary file
+        temp = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
+        filename = temp.name
+
+        # Generate PDF
+        doc = SimpleDocTemplate(filename, pagesize=letter)
+        styles = getSampleStyleSheet()
+        elements = []
+
+        # ---- Header with Logo ----
+        try:
+            logo_added = add_logo_to_pdf(elements)
+        except:
+            logo_added = False
+
+        # ---- Title and Details ----
+        elements.append(Paragraph("<b>DELIVERY NOTE</b>", styles["Title"]))
+        elements.append(Spacer(1, 12))
+        
+        # Issuer info and delivery location
+        elements.append(Paragraph(f"<b>Prepared by:</b> {current_user.username}", styles["Normal"]))
+        if filter_data.branch:  # FIXED: use branch
+            elements.append(Paragraph(f"<b>Delivery Location:</b> {filter_data.branch}", styles["Normal"]))
+        elements.append(Paragraph(f"<b>Date:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", styles["Normal"]))
+        
+        # Filter information
+        filter_info = []
+        if filter_data.branch:  # FIXED: use branch
+            filter_info.append(f"Location: {filter_data.branch}")
+        if filter_data.start_date:
+            filter_info.append(f"From: {filter_data.start_date}")
+        if filter_data.end_date:
+            filter_info.append(f"To: {filter_data.end_date}")
+        
+        if filter_info:
+            elements.append(Paragraph(f"<b>Filter:</b> {', '.join(filter_info)}", styles["Normal"]))
+        
+        elements.append(Spacer(1, 16))
+
+        # ---- Issued Items Table ----
+        data = [["Item ID", "Item Name", "Quantity", "Issued To", "Branch", "Date"]]
+        
+        total_items = 0
+        for txn in transactions:
+            item = db.query(Item).filter(Item.item_id == txn.item_id).first()
+            item_name = item.item_name if item else "Unknown Item"
+            
+            # Show both issued_to and branch information
+            data.append([
+                txn.item_id,
+                item_name,
+                str(txn.quantity),
+                txn.issued_to or "",  # Who received it
+                txn.branch or "",     # Which branch/location
+                txn.date.split("T")[0] if "T" in txn.date else txn.date
+            ])
+            total_items += txn.quantity
+
+        # Add summary row
+        data.append(["TOTAL No.", "", f"{total_items}", "", "", ""])
+
+        table = Table(data, repeatRows=1)
+        table.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.grey),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.whitesmoke),
+            ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("FONTSIZE", (0, 0), (-1, 0), 10),
+            ("BOTTOMPADDING", (0, 0), (-1, 0), 12),
+            ("BACKGROUND", (0, 1), (-1, -2), colors.beige),
+            ("BACKGROUND", (0, -1), (-1, -1), colors.lightgrey),
+            ("TEXTCOLOR", (0, -1), (-1, -1), colors.black),
+            ("FONTNAME", (0, -1), (-1, -1), "Helvetica-Bold"),
+            ("GRID", (0, 0), (-1, -1), 1, colors.black),
+        ]))
+        
+        elements.append(Paragraph("<b>Items Delivered</b>", styles["Heading2"]))
+        elements.append(table)
+        elements.append(Spacer(1, 30))
+
+        # ---- Signatures Section ----
+        elements.append(Paragraph("<b>Please Sign Below</b>", styles["Heading2"]))
+        elements.append(Spacer(1, 10))
+
+        # Signature lines - receiver name is left blank for physical signing
+        signature_table_data = [
+            ["", ""],
+            ["_" * 30, "_" * 30],
+            [f"Issuer: {current_user.username}", "Receiver:"],  # Receiver name left blank
+            ["", ""],
+            ["_" * 30, "_" * 30],
+            ["Date", "Date"],
+        ]
+
+        sig_table = Table(signature_table_data, colWidths=[3*inch, 3*inch])
+        sig_table.setStyle(TableStyle([
+            ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+            ("FONTNAME", (0, 2), (-1, 2), "Helvetica-Bold"),
+            ("FONTSIZE", (0, 0), (-1, -1), 12),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("LEADING", (0, 0), (-1, -1), 16),
+        ]))
+
+        elements.append(sig_table)
+        elements.append(Spacer(1, 10))
+
+        # ---- Footer ----
+        elements.append(Spacer(1, 20))
+        elements.append(Paragraph("<i>Please sign in the designated areas above after verifying the delivered items are in good condition.</i>", styles["Italic"]))
+        
+        doc.build(elements)
+
+        # Generate filename
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        location_suffix = f"_{filter_data.branch}" if filter_data.branch else ""  # FIXED: use branch
+        filename_with_date = f"Delivery_Note{location_suffix}_{timestamp}.pdf"
+
+        return FileResponse(
+            filename,
+            media_type="application/pdf",
+            filename=filename_with_date
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Delivery note generation error: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to generate delivery note: {str(e)}")
+
+@app.get("/report/locations")
+def get_locations(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """Get unique branches for filtering"""
+    branches = db.query(Transaction.branch).filter(
+        Transaction.branch.isnot(None),
+        Transaction.action_type == "Issue"
+    ).distinct().all()
+    
+    return {
+        "branches": [branch[0] for branch in branches if branch[0]]
+    }
 
 # ---- Transactions endpoints ----
 @app.post("/transactions", response_model=TransactionOut)
@@ -462,6 +641,37 @@ def create_transaction(payload: TransactionCreate, db: Session = Depends(get_db)
     db.commit()
     return TransactionOut(id=txn.id, item_id=txn.item_id, action_type=txn.action_type, quantity=txn.quantity,
                           issued_to=txn.issued_to, branch=txn.branch, from_location=txn.from_location, note=txn.note, created_by=txn.created_by, date=txn.date)
+
+def _parse_date_loose(s: str):
+    """Parse several common datetime/date string formats into a naive datetime object (UTC-agnostic).
+       Returns None if parsing fails."""
+    if not s:
+        return None
+    s = s.strip()
+    # remove trailing Z for fromisoformat
+    if s.endswith("Z"):
+        s = s[:-1]
+    # try fromisoformat (handles 'YYYY-MM-DD' and full ISO)
+    try:
+        return datetime.fromisoformat(s)
+    except Exception:
+        pass
+    # try common formats
+    fmts = [
+        "%Y-%m-%dT%H:%M:%S",
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d"
+    ]
+    for f in fmts:
+        try:
+            return datetime.strptime(s, f)
+        except Exception:
+            continue
+    # last resort: extract YYYY-MM-DD with regex
+    m = re.search(r"(\d{4}-\d{2}-\d{2})", s)
+    if m:
+        return datetime.strptime(m.group(1), "%Y-%m-%d")
+    return None
 
 @app.get("/transactions", response_model=List[TransactionOut])
 def list_transactions(limit: Optional[int] = None, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):

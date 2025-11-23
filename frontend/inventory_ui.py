@@ -6,6 +6,7 @@ import tempfile
 from PIL import Image as PILImage
 from datetime import datetime
 import os
+from datetime import timedelta
 
 API_BASE_URL = "https://inventory-backend-knf8.onrender.com"
 #API_BASE_URL = "http://127.0.0.1:8000"
@@ -177,7 +178,7 @@ def dashboard():
         return
 
     # Navigation
-    pages = ["Inventory Overview", "Add/Receive Stock", "Issue Stock", "Transaction History"]
+    pages = ["Inventory Overview", "Add/Receive Stock", "Issue Stock", "Transaction History", "Delivery Note"]
     
     # Only show Admin Tools for admin users
     if st.session_state.get('user_role') == 'admin':
@@ -193,6 +194,8 @@ def dashboard():
         issue_stock()
     elif page == "Transaction History":
         transaction_history()
+    elif page == "Delivery Note":
+        delivery_note_section()
     elif page == "Admin Tools":
         admin_tools()
 
@@ -347,6 +350,126 @@ def issue_stock():
             if result:
                 st.success(f"Successfully issued {quantity} units of {item_id}.")
                 st.rerun()
+
+def delivery_note_section():
+    st.header("📄 Delivery Note Generator")
+    
+    # Get available branches for filtering
+    try:
+        locations_response = api_call("/report/locations")
+        if locations_response:
+            branches = locations_response.get("branches", [])
+        else:
+            branches = []
+    except:
+        branches = []
+    
+    # Debug: Show what branches are available
+    if not branches:
+        st.warning("No branches found in the system. Make sure you have issued some items with branch information.")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        # Filter by branch (location)
+        st.subheader("Filter by Branch/Location")
+        selected_branch = st.selectbox(
+            "Select Branch", 
+            [""] + branches,
+            key="delivery_branch",
+            help="Choose the branch/location where items were delivered"
+        )
+        
+        # Date range
+        st.subheader("Date Range")
+        col1a, col2a = st.columns(2)
+        with col1a:
+            start_date = st.date_input("Start Date", datetime.now() - timedelta(days=30))
+        with col2a:
+            end_date = st.date_input("End Date", datetime.now())
+    
+    with col2:
+        # Simple info
+        st.subheader("Delivery Information")
+        if selected_branch:
+            st.info(f"📍 Generating delivery note for: **{selected_branch}**")
+        else:
+            st.info("📍 Generating delivery note for all branches")
+        
+        st.info("""
+        **The PDF will include:**
+        - List of items delivered to this branch
+        - Who received each item (Issued To)
+        - Branch information
+        - Signature lines for physical signing
+        """)
+    
+    # Generate delivery note button
+    if st.button("Generate Delivery Note PDF", type="primary"):
+        # Prepare filter data - use branch field
+        filter_data = {
+            "branch": selected_branch if selected_branch else None,
+            "start_date": start_date.isoformat(),
+            "end_date": end_date.isoformat()
+        }
+        
+        # Signature data - receiver name not needed since it comes from transactions
+        signature_data = {
+            "receiver_name": ""  # Leave blank since receiver names are in the table
+        }
+        
+        try:
+            token = st.session_state.get('token')
+            headers = {'Authorization': f'Bearer {token}'}
+            
+            # Generate delivery note
+            response = requests.post(
+                f"{API_BASE_URL}/report/delivery-note",
+                json={
+                    "filter_data": filter_data,
+                    "signature_data": signature_data
+                },
+                headers=headers
+            )
+            
+            if response.status_code == 200:
+                # Save the PDF
+                pdf_content = response.content
+                
+                # Create download button
+                st.success("✅ Delivery note generated successfully!")
+                
+                st.download_button(
+                    label="📥 Download Delivery Note PDF",
+                    data=pdf_content,
+                    file_name=f"delivery_note_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
+                    mime="application/pdf"
+                )
+                
+                # Show preview
+                st.subheader("Preview Information")
+                if selected_branch:
+                    st.info(f"• Branch: {selected_branch}")
+                else:
+                    st.info("• All branches")
+                st.info(f"• Period: {start_date} to {end_date}")
+                st.info("• Shows both 'Issued To' and 'Branch' information")
+                st.info("• Signature lines for issuer and receiver")
+                
+            else:
+                error_detail = "Unknown error"
+                try:
+                    error_detail = response.json().get("detail", str(response.status_code))
+                except:
+                    error_detail = str(response.status_code)
+                st.error(f"❌ Failed to generate delivery note: {error_detail}")
+                
+                # Show troubleshooting help
+                if "No issued items found" in error_detail:
+                    st.info("💡 **Tip:** Make sure you have issued some items to this branch with the 'Issue Stock' form.")
+                
+        except Exception as e:
+            st.error(f"Error generating delivery note: {str(e)}")
 
 def transaction_history():
     st.header("Recent Transactions")
