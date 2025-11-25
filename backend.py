@@ -444,11 +444,12 @@ def delete_item_endpoint(item_id: str, db: Session = Depends(get_db), current_us
 
 @app.post("/report/delivery-note")
 def generate_delivery_note(
-    filter_data: DeliveryNoteFilter,
-    signature_data: SignatureData,
+    request: DeliveryNoteRequest,
     db: Session = Depends(get_db), 
     current_user: User = Depends(get_current_user)
 ):
+    filter_data: DeliveryNoteFilter,
+    signature_data: SignatureData,
     """Generate a delivery note PDF with signature lines for physical signing"""
     try:
         # Query transactions with filters
