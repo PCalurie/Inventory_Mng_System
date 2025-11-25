@@ -9,3 +9,4 @@ reportlab
 pillow
 pydantic
 psycopg2-binary
+gunicorn
