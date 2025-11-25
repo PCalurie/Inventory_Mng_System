@@ -131,7 +131,11 @@ class DeliveryNoteFilter(BaseModel):
     end_date: Optional[str] = None
 
 class SignatureData(BaseModel):
-    receiver_name: str
+    receiver_name: Optional[str] = None
+
+class DeliveryNoteRequest(BaseModel):
+    filter_data: DeliveryNoteFilter
+    signature_data: SignatureData
 
 class ItemOut(BaseModel):
     item_id: str
@@ -448,8 +452,8 @@ def generate_delivery_note(
     db: Session = Depends(get_db), 
     current_user: User = Depends(get_current_user)
 ):
-    filter_data: DeliveryNoteFilter,
-    signature_data: SignatureData,
+    filter_data = request.filter_data
+    signature_data = request.signature_data
     """Generate a delivery note PDF with signature lines for physical signing"""
     try:
         # Query transactions with filters
@@ -463,7 +467,8 @@ def generate_delivery_note(
         if filter_data.start_date:
             query = query.filter(Transaction.date >= filter_data.start_date)
         if filter_data.end_date:
-            query = query.filter(Transaction.date <= filter_data.end_date)
+            end_date_inclusive = f"{filter_data.end_date}T23:59:59"
+            query = query.filter(Transaction.date <= end_date_inclusive)
         
         transactions = query.order_by(Transaction.date.desc()).all()
         
